@@ -98,10 +98,7 @@ pub enum EncodeError {
     PostcardSerializationFailed,
 
     /// Buffer too small for the data
-    BufferOverflow {
-        needed: usize,
-        capacity: usize,
-    },
+    BufferOverflow { needed: usize, capacity: usize },
 }
 
 impl fmt::Display for EncodeError {
@@ -127,10 +124,7 @@ pub enum DecodeError {
     PostcardDeserializationFailed,
 
     /// CRC mismatch - packet may be corrupted
-    CrcMismatch {
-        expected: u16,
-        computed: u16,
-    },
+    CrcMismatch { expected: u16, computed: u16 },
 }
 
 impl fmt::Display for DecodeError {
@@ -229,15 +223,12 @@ where
 ///
 /// # Returns
 /// Decoded user data of type T
-pub fn deserialize<T>(
-    buf: &mut [u8],
-) -> Result<T, DecodeError>
+pub fn deserialize<T>(buf: &mut [u8]) -> Result<T, DecodeError>
 where
     T: serde::de::DeserializeOwned,
 {
     // Step 1: COBS decode (in-place)
-    let wrapper_len = corncobs::decode_in_place(buf)
-        .map_err(|_| DecodeError::CobsDecodeFailed)?;
+    let wrapper_len = corncobs::decode_in_place(buf).map_err(|_| DecodeError::CobsDecodeFailed)?;
 
     // Step 2: Extract payload and CRC (format: [payload_bytes][crc16])
     if wrapper_len < 2 {
@@ -257,8 +248,7 @@ where
     }
 
     // Step 4: Deserialize user data from payload
-    postcard::from_bytes(payload)
-        .map_err(|_| DecodeError::PostcardDeserializationFailed)
+    postcard::from_bytes(payload).map_err(|_| DecodeError::PostcardDeserializationFailed)
 }
 
 #[cfg(test)]
@@ -329,7 +319,11 @@ mod tests {
     #[test]
     fn test_roundtrip_nested_struct() {
         let original = NestedStruct {
-            inner: InnerData { a: 1, b: 256, c: 65536 },
+            inner: InnerData {
+                a: 1,
+                b: 256,
+                c: 65536,
+            },
             flag: true,
         };
 
@@ -460,7 +454,10 @@ mod tests {
             Err(DecodeError::PostcardDeserializationFailed) => {
                 // Also acceptable - COBS might decode but produces invalid postcard data
             }
-            _ => panic!("Expected CobsDecodeFailed or PostcardDeserializationFailed error, got {:?}", result),
+            _ => panic!(
+                "Expected CobsDecodeFailed or PostcardDeserializationFailed error, got {:?}",
+                result
+            ),
         }
     }
 
@@ -468,7 +465,11 @@ mod tests {
     fn test_buffer_overflow() {
         // Use nested struct to create a large payload
         let large_data = NestedStruct {
-            inner: InnerData { a: 255, b: 0xFFFF, c: 0xFFFFFFFF },
+            inner: InnerData {
+                a: 255,
+                b: 0xFFFF,
+                c: 0xFFFFFFFF,
+            },
             flag: true,
         };
 
@@ -486,7 +487,10 @@ mod tests {
             Err(EncodeError::BufferOverflow { .. }) => {
                 // Also acceptable
             }
-            _ => panic!("Expected PostcardSerializationFailed or BufferOverflow error, got {:?}", result),
+            _ => panic!(
+                "Expected PostcardSerializationFailed or BufferOverflow error, got {:?}",
+                result
+            ),
         }
     }
 
@@ -569,7 +573,10 @@ mod tests {
             Err(DecodeError::CobsDecodeFailed) => {
                 // Also acceptable - corruption could make COBS invalid
             }
-            _ => panic!("Expected CrcMismatch or CobsDecodeFailed error, got {:?}", result),
+            _ => panic!(
+                "Expected CrcMismatch or CobsDecodeFailed error, got {:?}",
+                result
+            ),
         }
     }
 
@@ -619,7 +626,10 @@ mod tests {
         let err = EncodeError::PostcardSerializationFailed;
         assert_eq!(err.to_string(), "Postcard serialization failed");
 
-        let err = EncodeError::BufferOverflow { needed: 100, capacity: 50 };
+        let err = EncodeError::BufferOverflow {
+            needed: 100,
+            capacity: 50,
+        };
         assert_eq!(err.to_string(), "Buffer overflow: needed 100, had 50");
     }
 
@@ -631,7 +641,10 @@ mod tests {
         let err = DecodeError::PostcardDeserializationFailed;
         assert_eq!(err.to_string(), "Postcard deserialization failed");
 
-        let err = DecodeError::CrcMismatch { expected: 1234, computed: 5678 };
+        let err = DecodeError::CrcMismatch {
+            expected: 1234,
+            computed: 5678,
+        };
         assert_eq!(err.to_string(), "CRC mismatch: expected 1234, got 5678");
     }
 
@@ -641,7 +654,9 @@ mod tests {
         let original = TestMessage {
             id: 42,
             value: -12345,
-            data: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80],
+            data: [
+                5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80,
+            ],
         };
 
         let mut buf = [0u8; 512];
@@ -649,7 +664,11 @@ mod tests {
 
         // The encoded data should contain no zero bytes
         for (i, &byte) in buf[..len].iter().enumerate() {
-            assert_ne!(byte, 0, "COBS encoding should not produce zero bytes at index {}", i);
+            assert_ne!(
+                byte, 0,
+                "COBS encoding should not produce zero bytes at index {}",
+                i
+            );
         }
     }
 
@@ -696,7 +715,8 @@ mod tests {
 
         let original_err: Result<u32, u32> = Err(999);
         let len = serialize(&original_err, &mut buf).expect("serialize failed");
-        let result_err: Result<u32, u32> = deserialize(&mut buf[..len]).expect("deserialize failed");
+        let result_err: Result<u32, u32> =
+            deserialize(&mut buf[..len]).expect("deserialize failed");
         assert_eq!(result_err, original_err);
     }
 }
