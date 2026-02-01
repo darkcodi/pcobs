@@ -36,24 +36,34 @@
 //!
 //! # Example Usage
 //!
-//! ```rust,ignore
+//! ```rust
 //! use pcobs::{serialize, deserialize};
 //!
-//! // Create a message
-//! let msg = SensorData {
-//!     sensor_id: 0,
-//!     value: 2345,
-//!     timestamp: 12345,
-//! };
+//! #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+//! struct SensorData {
+//!     sensor_id: u32,
+//!     value: u16,
+//!     timestamp: u64,
+//! }
 //!
-//! // Encode for transmission
-//! let mut buf = [0u8; 512];
-//! let len = serialize(&msg, &mut buf)?;
-//! transport.write(&buf[..len]).await?;
-//! transport.write(&[0x00]).await?; // COBS delimiter
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Create a message
+//!     let msg = SensorData {
+//!         sensor_id: 0,
+//!         value: 2345,
+//!         timestamp: 12345,
+//!     };
 //!
-//! // Decode received data (after accumulating until 0x00)
-//! let decoded: SensorData = deserialize(&mut buf)?;
+//!     // Encode for transmission
+//!     let mut buf = [0u8; 512];
+//!     let len = serialize(&msg, &mut buf)?;
+//!     // In a real scenario, send buf[..len] over transport, followed by 0x00
+//!
+//!     // Decode received data (after accumulating until 0x00)
+//!     let decoded: SensorData = deserialize(&mut buf)?;
+//!     assert_eq!(msg, decoded);
+//!     Ok(())
+//! }
 //! ```
 //!
 //! # Buffer Size Requirements
