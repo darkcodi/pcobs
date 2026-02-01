@@ -76,7 +76,6 @@
 #![allow(dead_code)]
 
 use core::fmt;
-use serde::{Deserialize, Serialize};
 
 /// CRC-16 algorithm used for packet verification.
 ///
@@ -138,41 +137,6 @@ impl fmt::Display for DecodeError {
 }
 
 impl core::error::Error for DecodeError {}
-
-/// CRC-protected wrapper for byte slices.
-///
-/// This struct is used internally for testing. The actual protocol
-/// manually appends the CRC to avoid double serialization overhead.
-///
-/// # Fields
-/// * `payload` - Byte slice to protect
-/// * `crc` - CRC-16 checksum of the payload
-#[derive(Serialize, Deserialize, Debug)]
-struct CrcProtected<'a> {
-    /// Payload bytes
-    payload: &'a [u8],
-
-    /// CRC-16 of the payload (little-endian)
-    crc: u16,
-}
-
-impl<'a> CrcProtected<'a> {
-    /// Create a new CrcProtected wrapper with given payload and CRC.
-    fn new(payload: &'a [u8], crc: u16) -> Self {
-        Self { payload, crc }
-    }
-
-    /// Create a new CrcProtected wrapper, computing the CRC automatically.
-    fn from_payload(payload: &'a [u8]) -> Self {
-        let crc = CRC_ALGORITHM.checksum(payload);
-        Self { payload, crc }
-    }
-
-    /// Verify the CRC is valid for the contained payload.
-    fn is_valid(&self) -> bool {
-        self.crc == CRC_ALGORITHM.checksum(self.payload)
-    }
-}
 
 /// Encodes a complete packet with CRC inside COBS framing.
 ///
@@ -660,37 +624,6 @@ mod tests {
 
         let err = DecodeError::CrcMismatch { expected: 1234, computed: 5678 };
         assert_eq!(err.to_string(), "CRC mismatch: expected 1234, got 5678");
-    }
-
-    #[test]
-    fn test_crc_protected_new() {
-        let payload = b"test payload";
-        let crc = CRC_ALGORITHM.checksum(payload);
-        let protected = CrcProtected::new(payload, crc);
-
-        assert_eq!(protected.payload, payload);
-        assert_eq!(protected.crc, crc);
-        assert!(protected.is_valid());
-    }
-
-    #[test]
-    fn test_crc_protected_from_payload() {
-        let payload = b"test payload";
-        let protected = CrcProtected::from_payload(payload);
-
-        assert_eq!(protected.payload, payload);
-        assert!(protected.is_valid());
-    }
-
-    #[test]
-    fn test_crc_protected_invalid() {
-        let payload = b"test payload";
-        let mut protected = CrcProtected::from_payload(payload);
-
-        // Corrupt the CRC
-        protected.crc = protected.crc.wrapping_add(1);
-
-        assert!(!protected.is_valid());
     }
 
     #[test]
