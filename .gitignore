@@ -1,0 +1,18 @@
+**/*.rs.bk
+.#*
+.gdb_history
+Cargo.lock
+target/
+
+# WiFi credentials
+.env
+
+# editor files
+.vscode/
+.idea/
+
+# ci
+.github/
+
+# ai
+.claude/
