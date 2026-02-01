@@ -37,7 +37,7 @@
 //! # Example Usage
 //!
 //! ```rust,ignore
-//! use framed_postcard::{serialize, deserialize};
+//! use pcobs::{serialize, deserialize};
 //!
 //! // Create a message
 //! let msg = SensorData {
