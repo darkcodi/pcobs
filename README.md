@@ -7,6 +7,10 @@
 [![Crates.io](https://img.shields.io/crates/v/pcobs)](https://crates.io/crates/pcobs)
 [![Documentation](https://docs.rs/pcobs/badge.svg)](https://docs.rs/pcobs)
 [![Rust](https://img.shields.io/badge/rust-1.82%2B-orange.svg)](https://www.rust-lang.org)
+[![no_std](https://img.shields.io/badge/no__std-support-brightgreen.svg)](https://github.com/rust-embedded/wg)
+[![zero-alloc](https://img.shields.io/badge/alloc--free-brightgreen.svg)](https://github.com/rust-embedded/wg)
+
+**`no_std` • zero-allocation • embedded-ready**
 
 </div>
 
@@ -20,6 +24,8 @@ You've got structs. You need to send them over UART/TCP/USB/whatever.
 - 📝 **postcard** — compact serde serialization, `no_std` friendly
 - 🔐 **CRC-16** — catch corrupted packets
 - 🧱 **COBS framing** — zero-byte delimiters, no escaping hell
+- 💾 **Zero allocations** — stack-only, no `Vec`/`Box`/`HashMap`
+- ⚡ **`no_std`** — works on bare-metal, no OS required
 
 Two functions. That's it.
 
@@ -105,8 +111,8 @@ Works over anything that moves bytes:
 
 ## ⚡ Features
 
-- `no_std` — embedded ready
+- **`no_std`** — works on bare-metal, no OS required
+- **Zero allocations** — stack-only, no heap, embedded-friendly
 - `serde` — derive your structs
-- Zero allocations
 - Single-pass encoding
 - In-place decoding
