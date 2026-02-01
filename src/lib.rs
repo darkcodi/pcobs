@@ -8,35 +8,36 @@
 //! # Protocol Stack
 //!
 //! ```text
-//! ┌─────────────┐    ┌─────────────┐    ┌─────────────────┐    ┌─────────────┐
-//! │ Application │ -> │  postcard   │ -> │  CrcProtected   │ -> │    COBS     │ -> Transport
-//! │   Structs   │    │   Serialize │    │  (adds CRC)     │    │   Framing   │
-//! └─────────────┘    └─────────────┘    └─────────────────┘    └─────────────┘
+//! ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+//! │ Application │ -> │  postcard   │ -> │  + CRC-16   │ -> │    COBS     │ -> Transport
+//! │   Structs   │    │   Serialize │    │  (appended) │    │   Framing   │
+//! └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
 //!
-//! Transport -> ┌─────────────┐    ┌─────────────┐    ┌─────────────────┐    ┌─────────────┐
-//!              │    COBS     │ -> │CrcProtected │ -> │  postcard       │ -> │ Application │
-//!              │  Unframing  │    │(verify CRC) │    │  Deserialize    │    │   Structs   │
-//!              └─────────────┘    └─────────────┘    └─────────────────┘    └─────────────┘
+//! Transport -> ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+//!              │    COBS     │ -> │  CRC-16     │ -> │  postcard   │ -> │ Application │
+//!              │  Unframing  │    │  Verify     │    │  Deserialize│    │   Structs   │
+//!              └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
 //! ```
 //!
 //! # Packet Format
 //!
 //! ```text
 //! ┌───────────────────────────────────────────────┬────────┐
-//! │ COBS Encoded: {payload_bytes, crc16}          │ 0x00   │
-//! │ (CrcProtected wrapper struct)                 │ (COBS  │
+//! │ COBS Encoded: {postcard_payload, crc16_le}    │ 0x00   │
+//! │                                               │ (COBS  │
 //! │                                               │ marker)│
 //! └───────────────────────────────────────────────┴────────┘
 //! ```
 //!
-//! The `CrcProtected` wrapper contains both the postcard-serialized user data
-//! and its CRC-16 checksum. This entire wrapper is COBS-encoded, ensuring that
-//! the CRC bytes cannot contain 0x00 and interfere with packet framing.
+//! The protocol is optimized for minimal overhead:
+//! - User data is serialized once with postcard
+//! - CRC-16 is appended directly (no double serialization)
+//! - The combined payload is COBS-encoded to eliminate zero bytes
 //!
 //! # Example Usage
 //!
 //! ```rust,ignore
-//! use darkpicolib::connectivity::encode::*;
+//! use framed_postcard::{serialize, deserialize};
 //!
 //! // Create a message
 //! let msg = SensorData {
@@ -52,8 +53,15 @@
 //! transport.write(&[0x00]).await?; // COBS delimiter
 //!
 //! // Decode received data (after accumulating until 0x00)
-//! let decoded: Message = deserialize(&mut buf)?;
+//! let decoded: SensorData = deserialize(&mut buf)?;
 //! ```
+//!
+//! # Buffer Size Requirements
+//!
+//! The buffer is split 50/50 between input and COBS output. The maximum payload
+//! size is approximately **45% of buffer size** (accounts for payload + CRC + COBS overhead).
+//!
+//! For example, a 512-byte buffer can handle payloads up to ~230 bytes.
 //!
 //! # Transport Agnostic
 //!
@@ -131,20 +139,20 @@ impl fmt::Display for DecodeError {
 
 impl core::error::Error for DecodeError {}
 
-/// CRC-protected wrapper for any serializable payload.
+/// CRC-protected wrapper for byte slices.
 ///
-/// This struct is postcard-serialized, then COBS-encoded.
-/// The CRC protects the payload, and COBS protects everything from 0x00.
+/// This struct is used internally for testing. The actual protocol
+/// manually appends the CRC to avoid double serialization overhead.
 ///
 /// # Fields
-/// * `payload` - Postcard-serialized user data
+/// * `payload` - Byte slice to protect
 /// * `crc` - CRC-16 checksum of the payload
 #[derive(Serialize, Deserialize, Debug, defmt::Format)]
 struct CrcProtected<'a> {
-    /// Postcard-serialized user data
+    /// Payload bytes
     payload: &'a [u8],
 
-    /// CRC-16 of the payload
+    /// CRC-16 of the payload (little-endian)
     crc: u16,
 }
 
@@ -170,14 +178,15 @@ impl<'a> CrcProtected<'a> {
 ///
 /// # Process
 /// 1. Serialize user data with postcard → payload_bytes
-/// 2. Create CrcProtected wrapper (computes CRC)
-/// 3. Serialize wrapper with postcard → wrapper_bytes
-/// 4. COBS-encode wrapper_bytes → transmission_bytes
+/// 2. Append CRC-16 checksum to payload_bytes (no double serialization!)
+/// 3. COBS-encode → transmission_bytes
 ///
 /// # Buffer Size Requirements
 ///
-/// This function partitions the buffer internally (2/3 for working area, 1/3 for scratch).
-/// To ensure success, provide a buffer at least **3x** your expected payload size.
+/// Buffer is split 50/50 between input and COBS output. The maximum payload size
+/// is approximately **45% of buffer size** (accounts for payload + CRC + COBS overhead).
+///
+/// For example, a 512-byte buffer can handle payloads up to ~230 bytes.
 ///
 /// # Arguments
 /// * `payload` - Data to encode (must implement Serialize)
@@ -189,57 +198,44 @@ pub fn serialize<T>(payload: &T, buf: &mut [u8]) -> Result<usize, EncodeError>
 where
     T: serde::Serialize,
 {
-    // Partition buffer to avoid overlapping borrows:
-    // - Use 2/3 for working area (wrapper + temp), 1/3 for payload scratch
-    let work_len = (buf.len() * 2) / 3;
-    let (buf_work, buf_scratch) = buf.split_at_mut(work_len);
+    // Buffer layout: COBS output at start, wrapper input at end.
+    // COBS can expand by ~1.33x worst-case, so we split roughly evenly.
+    let split_idx = buf.len() / 2;
 
-    // Step 1: Serialize user data to postcard (in scratch area)
-    let payload_bytes = postcard::to_slice(payload, buf_scratch)
-        .map_err(|_| EncodeError::PostcardSerializationFailed)?;
-
-    // Step 2: Create CrcProtected wrapper (computes CRC automatically)
-    let protected = CrcProtected::from_payload(payload_bytes);
-
-    // Step 3: Serialize the wrapper with postcard (in work area)
-    let wrapper_len = postcard::to_slice(&protected, buf_work)
+    // Step 1: Serialize user data to end of buffer (input area)
+    let payload_len = postcard::to_slice(payload, &mut buf[split_idx..])
         .map_err(|_| EncodeError::PostcardSerializationFailed)?
         .len();
 
-    // Step 4: COBS encode - copy to temp first, then encode to avoid overlap
-    let max_cobs_len = corncobs::max_encoded_len(wrapper_len);
-    if buf_work.len() < max_cobs_len {
+    // Step 2: Append CRC (manually construct wrapper - no double serialization!)
+    let wrapper_len = payload_len + 2; // payload + u16 CRC
+    if split_idx + wrapper_len > buf.len() {
         return Err(EncodeError::BufferOverflow {
-            needed: max_cobs_len,
-            capacity: buf_work.len(),
+            needed: wrapper_len,
+            capacity: buf.len() - split_idx,
         });
     }
+    let payload_start = split_idx;
+    let crc_start = payload_start + payload_len;
+    let crc = CRC_ALGORITHM.checksum(&buf[payload_start..crc_start]);
+    buf[crc_start] = crc as u8;
+    buf[crc_start + 1] = (crc >> 8) as u8;
 
-    // Split work area: wrapper data at start, temp space, output at end
-    let temp_start = wrapper_len;
-    let (buf_wrapper, buf_rest) = buf_work.split_at_mut(temp_start);
-    let (buf_temp, buf_out) = buf_rest.split_at_mut(wrapper_len);
+    // Step 3: COBS encode from input (at end) to output (at start)
+    let max_cobs_len = corncobs::max_encoded_len(wrapper_len);
+    if max_cobs_len > split_idx {
+        return Err(EncodeError::BufferOverflow {
+            needed: max_cobs_len,
+            capacity: split_idx,
+        });
+    }
+    // Use split_at_mut to get non-overlapping mutable slices
+    let (buf_out, buf_in) = buf.split_at_mut(split_idx);
+    let cobs_len = corncobs::encode_buf(&buf_in[..wrapper_len], buf_out);
 
-    // Copy wrapper to temp area, then encode to output area
-    buf_temp.copy_from_slice(&buf_wrapper[..wrapper_len]);
-    let cobs_len = corncobs::encode_buf(buf_temp, buf_out);
-
-    // Step 5: Copy COBS-encoded data to the start of the buffer
-    // We need to get the offset of buf_out from the start of buf
-    // buf_out starts at wrapper_len * 2 within buf_work
-    let cobs_offset = wrapper_len * 2;
-
-    // Split buf to get two non-overlapping mutable slices
-    let (buf_start, _buf_rest) = buf.split_at_mut(cobs_offset);
-    let (buf_cobs_region, _) = _buf_rest.split_at_mut(cobs_len);
-
-    // Copy COBS data to start of buffer
-    buf_start[..cobs_len].copy_from_slice(buf_cobs_region);
-
-    // corncobs::encode_buf may return a length that includes a trailing zero
-    // For proper COBS encoding, we should not include this trailing zero
-    // Check if the last byte is zero and if so, reduce the length
-    let actual_len = if cobs_len > 0 && buf[cobs_len - 1] == 0 {
+    // corncobs::encode_buf may include a trailing zero (COBS delimiter)
+    // The delimiter is added by the transport layer, not part of the packet
+    let actual_len = if cobs_len > 0 && buf_out[cobs_len - 1] == 0 {
         cobs_len - 1
     } else {
         cobs_len
@@ -251,10 +247,9 @@ where
 /// Decodes a complete packet with CRC inside COBS framing.
 ///
 /// # Process
-/// 1. COBS-decode received bytes → wrapper_bytes
-/// 2. Deserialize wrapper_bytes → CrcProtected
-/// 3. Verify CRC
-/// 4. Deserialize payload to user data
+/// 1. COBS-decode received bytes → payload_bytes + crc16
+/// 2. Verify CRC
+/// 3. Deserialize payload to user data
 ///
 /// # Arguments
 /// * `buf` - Buffer containing COBS-encoded packet
@@ -267,24 +262,29 @@ pub fn deserialize<T>(
 where
     T: serde::de::DeserializeOwned,
 {
-    // Step 1: COBS decode
+    // Step 1: COBS decode (in-place)
     let wrapper_len = corncobs::decode_in_place(buf)
         .map_err(|_| DecodeError::CobsDecodeFailed)?;
 
-    // Step 2: Deserialize CrcProtected wrapper
-    let protected: CrcProtected = postcard::from_bytes(&buf[..wrapper_len])
-        .map_err(|_| DecodeError::PostcardDeserializationFailed)?;
+    // Step 2: Extract payload and CRC (format: [payload_bytes][crc16])
+    if wrapper_len < 2 {
+        return Err(DecodeError::PostcardDeserializationFailed);
+    }
+    let payload_len = wrapper_len - 2;
+    let payload = &buf[..payload_len];
+    let crc_received = u16::from_le_bytes([buf[payload_len], buf[payload_len + 1]]);
 
-    // Step 3: Verify CRC
-    if !protected.is_valid() {
+    // Step 3: Verify CRC (compute once, reuse for error if needed)
+    let crc_computed = CRC_ALGORITHM.checksum(payload);
+    if crc_received != crc_computed {
         return Err(DecodeError::CrcMismatch {
-            expected: protected.crc,
-            computed: CRC_ALGORITHM.checksum(protected.payload),
+            expected: crc_received,
+            computed: crc_computed,
         });
     }
 
     // Step 4: Deserialize user data from payload
-    postcard::from_bytes(protected.payload)
+    postcard::from_bytes(payload)
         .map_err(|_| DecodeError::PostcardDeserializationFailed)
 }
 
