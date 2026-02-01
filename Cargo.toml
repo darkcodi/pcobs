@@ -4,9 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
 crc = "3.4"
 defmt = "1.0"
-thiserror = "2.0"
-postcard = "1.1"
+postcard = { version = "1.1", default-features = false }
 corncobs = "0.1"

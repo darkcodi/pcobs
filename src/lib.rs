@@ -64,8 +64,10 @@
 //! - Radio protocols
 //! - File I/O for testing
 
+#![no_std]
 #![allow(dead_code)]
 
+use core::fmt;
 use serde::{Deserialize, Serialize};
 
 /// CRC-16 algorithm used for packet verification.
@@ -74,38 +76,60 @@ use serde::{Deserialize, Serialize};
 const CRC_ALGORITHM: crc::Crc<u16> = crc::Crc::<u16>::new(&crc::CRC_16_IBM_SDLC);
 
 /// Error during encoding (serialization).
-#[derive(Debug, defmt::Format, thiserror::Error)]
+#[derive(Debug, defmt::Format)]
 pub enum EncodeError {
     /// Postcard serialization failed - data type not supported
-    #[error("Postcard serialization failed")]
     PostcardSerializationFailed,
 
     /// Buffer too small for the data
-    #[error("Buffer overflow: needed {needed}, had {capacity}")]
     BufferOverflow {
         needed: usize,
         capacity: usize,
     },
 }
 
+impl fmt::Display for EncodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PostcardSerializationFailed => write!(f, "Postcard serialization failed"),
+            Self::BufferOverflow { needed, capacity } => {
+                write!(f, "Buffer overflow: needed {needed}, had {capacity}")
+            }
+        }
+    }
+}
+
+impl core::error::Error for EncodeError {}
+
 /// Error during decoding (deserialization).
-#[derive(Debug, defmt::Format, thiserror::Error)]
+#[derive(Debug, defmt::Format)]
 pub enum DecodeError {
     /// COBS decoding failed - invalid framing (packet corruption)
-    #[error("COBS decoding failed")]
     CobsDecodeFailed,
 
     /// Postcard deserialization failed - invalid data format
-    #[error("Postcard deserialization failed")]
     PostcardDeserializationFailed,
 
     /// CRC mismatch - packet may be corrupted
-    #[error("CRC mismatch: expected {expected}, got {computed}")]
     CrcMismatch {
         expected: u16,
         computed: u16,
     },
 }
+
+impl fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CobsDecodeFailed => write!(f, "COBS decoding failed"),
+            Self::PostcardDeserializationFailed => write!(f, "Postcard deserialization failed"),
+            Self::CrcMismatch { expected, computed } => {
+                write!(f, "CRC mismatch: expected {expected}, got {computed}")
+            }
+        }
+    }
+}
+
+impl core::error::Error for DecodeError {}
 
 /// CRC-protected wrapper for any serializable payload.
 ///
