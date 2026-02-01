@@ -73,7 +73,6 @@
 //! - File I/O for testing
 
 #![no_std]
-#![allow(dead_code)]
 
 use core::fmt;
 
