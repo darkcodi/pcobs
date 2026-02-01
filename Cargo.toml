@@ -6,6 +6,5 @@ edition = "2024"
 [dependencies]
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 crc = "3.4"
-defmt = "1.0"
 postcard = { version = "1.1", default-features = false }
 corncobs = "0.1"

@@ -84,7 +84,7 @@ use serde::{Deserialize, Serialize};
 const CRC_ALGORITHM: crc::Crc<u16> = crc::Crc::<u16>::new(&crc::CRC_16_IBM_SDLC);
 
 /// Error during encoding (serialization).
-#[derive(Debug, defmt::Format)]
+#[derive(Debug)]
 pub enum EncodeError {
     /// Postcard serialization failed - data type not supported
     PostcardSerializationFailed,
@@ -110,7 +110,7 @@ impl fmt::Display for EncodeError {
 impl core::error::Error for EncodeError {}
 
 /// Error during decoding (deserialization).
-#[derive(Debug, defmt::Format)]
+#[derive(Debug)]
 pub enum DecodeError {
     /// COBS decoding failed - invalid framing (packet corruption)
     CobsDecodeFailed,
@@ -147,7 +147,7 @@ impl core::error::Error for DecodeError {}
 /// # Fields
 /// * `payload` - Byte slice to protect
 /// * `crc` - CRC-16 checksum of the payload
-#[derive(Serialize, Deserialize, Debug, defmt::Format)]
+#[derive(Serialize, Deserialize, Debug)]
 struct CrcProtected<'a> {
     /// Payload bytes
     payload: &'a [u8],
