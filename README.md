@@ -86,14 +86,14 @@ let decoded: SensorData = deserialize(&mut buf[..n])?;
 
 ## 📏 Buffer Math
 
-Buffer gets split 50/50 during encoding. Max payload ≈ **45% of buffer size**.
+Encoding is done **in-place** - no buffer splitting needed. COBS adds minimal overhead (at most 1 byte per 254 bytes), plus 2 bytes for CRC.
 
 | Buffer | Max Payload |
 |--------|-------------|
-| 64 B   | ~28 B       |
-| 256 B  | ~115 B      |
-| 512 B  | ~230 B      |
-| 1024 B | ~460 B      |
+| 64 B   | ~60 B       |
+| 256 B  | ~252 B      |
+| 512 B  | ~508 B      |
+| 1024 B | ~1018 B     |
 
 ---
 

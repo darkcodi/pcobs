@@ -1,7 +1,7 @@
 //! Binary encoding for structured data communication.
 //!
 //! This module provides a complete protocol implementation featuring:
-//! - **COBS framing** via `corncobs` - eliminates delimiter issues in binary data
+//! - **COBS framing** via `cobsin` - in-place encoding, eliminates delimiter issues in binary data
 //! - **CRC-16 error detection** via `crc` - catches transmission errors
 //! - **postcard serialization** - compact no_std serde format
 //!
@@ -68,10 +68,10 @@
 //!
 //! # Buffer Size Requirements
 //!
-//! The buffer is split 50/50 between input and COBS output. The maximum payload
-//! size is approximately **45% of buffer size** (accounts for payload + CRC + COBS overhead).
+//! Encoding is done **in-place** - no buffer splitting needed. COBS adds minimal overhead
+//! (at most 1 byte per 254 bytes of input), plus 2 bytes for CRC-16.
 //!
-//! For example, a 512-byte buffer can handle payloads up to ~230 bytes.
+//! For example, a 512-byte buffer can handle payloads up to ~508 bytes.
 //!
 //! # Transport Agnostic
 //!
@@ -146,14 +146,14 @@ impl core::error::Error for DecodeError {}
 /// # Process
 /// 1. Serialize user data with postcard → payload_bytes
 /// 2. Append CRC-16 checksum to payload_bytes (no double serialization!)
-/// 3. COBS-encode → transmission_bytes
+/// 3. COBS-encode in-place → transmission_bytes
 ///
 /// # Buffer Size Requirements
 ///
-/// Buffer is split 50/50 between input and COBS output. The maximum payload size
-/// is approximately **45% of buffer size** (accounts for payload + CRC + COBS overhead).
+/// Encoding is done **in-place** - no buffer splitting needed. COBS adds minimal overhead
+/// (at most 1 byte per 254 bytes of input), plus 2 bytes for CRC-16.
 ///
-/// For example, a 512-byte buffer can handle payloads up to ~230 bytes.
+/// For example, a 512-byte buffer can handle payloads up to ~508 bytes.
 ///
 /// # Arguments
 /// * `payload` - Data to encode (must implement Serialize)
