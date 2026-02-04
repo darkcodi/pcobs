@@ -6,7 +6,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/pcobs)](https://crates.io/crates/pcobs)
 [![Documentation](https://docs.rs/pcobs/badge.svg)](https://docs.rs/pcobs)
-[![Rust](https://img.shields.io/badge/rust-1.82%2B-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.83%2B-orange.svg)](https://www.rust-lang.org)
 [![no_std](https://img.shields.io/badge/no__std-support-brightgreen.svg)](https://github.com/rust-embedded/wg)
 [![zero-alloc](https://img.shields.io/badge/alloc--free-brightgreen.svg)](https://github.com/rust-embedded/wg)
 
@@ -30,8 +30,8 @@ You've got structs. You need to send them over UART/TCP/USB/whatever.
 Two functions. That's it.
 
 ```rust
-let encoded = serialize(&my_struct, &mut buf)?;
-let decoded = deserialize::<MyStruct>(&mut buf)?;
+let len = serialize(&my_struct, &mut buf)?;
+let my_struct = deserialize::<MyStruct>(&mut buf, len)?;
 ```
 
 ---
@@ -40,7 +40,7 @@ let decoded = deserialize::<MyStruct>(&mut buf)?;
 
 ```toml
 [dependencies]
-pcobs = "0.1"
+pcobs = "1"
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -65,7 +65,7 @@ stream.write_all(&[0x00])?; // COBS delimiter
 // Receiver
 let mut buf = [0u8; 256];
 let n = read_until_delimiter(stream, &mut buf)?;
-let decoded: SensorData = deserialize(&mut buf[..n])?;
+let decoded: SensorData = deserialize(&mut buf, n)?;
 ```
 
 ---
@@ -74,13 +74,18 @@ let decoded: SensorData = deserialize(&mut buf[..n])?;
 
 ```
 ┌────────────────────────────────────────┬──────┐
-│ COBS(payload + CRC16)                  │ 0x00 │
-│                                        │      │
-│ • payload = postcard(your data)        │ delim│
-│ • CRC-16 = checksum                    │      │
-│ • COBS = no zeros in encoded data      │      │
+│ Payload                     │ CRC-16   │ 0x00 │
+│ postcard(your data)         │ checksum │      │
+│────────────────────────────────────────│      │
+│ COBS frame                             │ delim│
+│ no zeros in encoded data               │      │
 └────────────────────────────────────────┴──────┘
 ```
+Steps:
+1. Serialize your struct with **postcard**
+2. Append **CRC-16** checksum (2 bytes)
+3. COBS-encode the whole thing
+4. Send over your transport, appending a **0x00** delimiter
 
 ---
 
