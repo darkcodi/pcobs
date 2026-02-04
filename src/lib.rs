@@ -60,7 +60,7 @@
 //!     // In a real scenario, send buf[..len] over transport, followed by 0x00
 //!
 //!     // Decode received data (after accumulating until 0x00)
-//!     let decoded: SensorData = deserialize(&mut buf)?;
+//!     let decoded: SensorData = deserialize(&mut buf, len)?;
 //!     assert_eq!(msg, decoded);
 //!     Ok(())
 //! }
@@ -165,50 +165,29 @@ pub fn serialize<T>(payload: &T, buf: &mut [u8]) -> Result<usize, EncodeError>
 where
     T: serde::Serialize,
 {
-    // Buffer layout: COBS output at start, wrapper input at end.
-    // COBS can expand by ~1.33x worst-case, so we split roughly evenly.
-    let split_idx = buf.len() / 2;
-
-    // Step 1: Serialize user data to end of buffer (input area)
-    let payload_len = postcard::to_slice(payload, &mut buf[split_idx..])
+    // Step 1: Serialize user data to payload bytes
+    let payload_len = postcard::to_slice(payload, buf)
         .map_err(|_| EncodeError::PostcardSerializationFailed)?
         .len();
 
-    // Step 2: Append CRC (manually construct wrapper - no double serialization!)
+    // Step 2: Compute and append CRC-16 checksum (little-endian)
     let wrapper_len = payload_len + 2; // payload + u16 CRC
-    if split_idx + wrapper_len > buf.len() {
+    if wrapper_len > buf.len() {
         return Err(EncodeError::BufferOverflow {
             needed: wrapper_len,
-            capacity: buf.len() - split_idx,
+            capacity: buf.len(),
         });
     }
-    let payload_start = split_idx;
-    let crc_start = payload_start + payload_len;
-    let crc = CRC_ALGORITHM.checksum(&buf[payload_start..crc_start]);
-    buf[crc_start] = crc as u8;
-    buf[crc_start + 1] = (crc >> 8) as u8;
+    let crc = CRC_ALGORITHM.checksum(&buf[..payload_len]);
+    buf[payload_len] = crc as u8;
+    buf[payload_len + 1] = (crc >> 8) as u8;
 
-    // Step 3: COBS encode from input (at end) to output (at start)
-    let max_cobs_len = corncobs::max_encoded_len(wrapper_len);
-    if max_cobs_len > split_idx {
-        return Err(EncodeError::BufferOverflow {
-            needed: max_cobs_len,
-            capacity: split_idx,
-        });
-    }
-    // Use split_at_mut to get non-overlapping mutable slices
-    let (buf_out, buf_in) = buf.split_at_mut(split_idx);
-    let cobs_len = corncobs::encode_buf(&buf_in[..wrapper_len], buf_out);
-
-    // corncobs::encode_buf may include a trailing zero (COBS delimiter)
-    // The delimiter is added by the transport layer, not part of the packet
-    let actual_len = if cobs_len > 0 && buf_out[cobs_len - 1] == 0 {
-        cobs_len - 1
-    } else {
-        cobs_len
-    };
-
-    Ok(actual_len)
+    // Step 3: COBS encode in-place
+    cobsin::cobs_encode_in_place(buf, wrapper_len)
+        .map_err(|_| EncodeError::BufferOverflow {
+            needed: wrapper_len,
+            capacity: buf.len(),
+        })
 }
 
 /// Decodes a complete packet with CRC inside COBS framing.
@@ -220,19 +199,21 @@ where
 ///
 /// # Arguments
 /// * `buf` - Buffer containing COBS-encoded packet
+/// * `len` - Length of valid data in `buf`
 ///
 /// # Returns
 /// Decoded user data of type T
-pub fn deserialize<T>(buf: &mut [u8]) -> Result<T, DecodeError>
+pub fn deserialize<T>(buf: &mut [u8], len: usize) -> Result<T, DecodeError>
 where
     T: serde::de::DeserializeOwned,
 {
     // Step 1: COBS decode (in-place)
-    let wrapper_len = corncobs::decode_in_place(buf).map_err(|_| DecodeError::CobsDecodeFailed)?;
+    let wrapper_len = cobsin::cobs_decode_in_place(buf, len)
+        .map_err(|_| DecodeError::CobsDecodeFailed)?;
 
     // Step 2: Extract payload and CRC (format: [payload_bytes][crc16])
     if wrapper_len < 2 {
-        return Err(DecodeError::PostcardDeserializationFailed);
+        return Err(DecodeError::CobsDecodeFailed);
     }
     let payload_len = wrapper_len - 2;
     let payload = &buf[..payload_len];
@@ -300,7 +281,7 @@ mod tests {
         let mut buf = [0u8; 512];
         let len = serialize(&original, &mut buf).expect("serialize failed");
 
-        let result: TestMessage = deserialize(&mut buf[..len]).expect("deserialize failed");
+        let result: TestMessage = deserialize(&mut buf, len).expect("deserialize failed");
 
         assert_eq!(result, original);
     }
@@ -311,7 +292,7 @@ mod tests {
         let mut buf = [0u8; 64];
         let len = serialize(&original, &mut buf).expect("serialize failed");
 
-        let result: EmptyStruct = deserialize(&mut buf[..len]).expect("deserialize failed");
+        let result: EmptyStruct = deserialize(&mut buf, len).expect("deserialize failed");
 
         assert_eq!(result, original);
     }
@@ -330,7 +311,7 @@ mod tests {
         let mut buf = [0u8; 128];
         let len = serialize(&original, &mut buf).expect("serialize failed");
 
-        let result: NestedStruct = deserialize(&mut buf[..len]).expect("deserialize failed");
+        let result: NestedStruct = deserialize(&mut buf, len).expect("deserialize failed");
 
         assert_eq!(result, original);
     }
@@ -347,7 +328,7 @@ mod tests {
             let mut buf = [0u8; 128];
             let len = serialize(&original, &mut buf).expect("serialize failed");
 
-            let result: TestEnum = deserialize(&mut buf[..len]).expect("deserialize failed");
+            let result: TestEnum = deserialize(&mut buf, len).expect("deserialize failed");
 
             assert_eq!(result, original);
         }
@@ -359,36 +340,36 @@ mod tests {
         let original_u8: u8 = 255;
         let mut buf = [0u8; 64];
         let len = serialize(&original_u8, &mut buf).unwrap();
-        let result_u8: u8 = deserialize(&mut buf[..len]).unwrap();
+        let result_u8: u8 = deserialize(&mut buf, len).unwrap();
         assert_eq!(result_u8, original_u8);
 
         // Test i8
         let original_i8: i8 = -128;
         let len = serialize(&original_i8, &mut buf).unwrap();
-        let result_i8: i8 = deserialize(&mut buf[..len]).unwrap();
+        let result_i8: i8 = deserialize(&mut buf, len).unwrap();
         assert_eq!(result_i8, original_i8);
 
         // Test u64
         let original_u64: u64 = 0x123456789ABCDEF0;
         let len = serialize(&original_u64, &mut buf).unwrap();
-        let result_u64: u64 = deserialize(&mut buf[..len]).unwrap();
+        let result_u64: u64 = deserialize(&mut buf, len).unwrap();
         assert_eq!(result_u64, original_u64);
 
         // Test bool
         let original_bool: bool = true;
         let len = serialize(&original_bool, &mut buf).unwrap();
-        let result_bool: bool = deserialize(&mut buf[..len]).unwrap();
+        let result_bool: bool = deserialize(&mut buf, len).unwrap();
         assert_eq!(result_bool, original_bool);
 
         // Test Option
         let original_some: Option<u32> = Some(42);
         let len = serialize(&original_some, &mut buf).unwrap();
-        let result_some: Option<u32> = deserialize(&mut buf[..len]).unwrap();
+        let result_some: Option<u32> = deserialize(&mut buf, len).unwrap();
         assert_eq!(result_some, original_some);
 
         let original_none: Option<u32> = None;
         let len = serialize(&original_none, &mut buf).unwrap();
-        let result_none: Option<u32> = deserialize(&mut buf[..len]).unwrap();
+        let result_none: Option<u32> = deserialize(&mut buf, len).unwrap();
         assert_eq!(result_none, original_none);
     }
 
@@ -398,7 +379,7 @@ mod tests {
         let mut buf = [0u8; 128];
         let len = serialize(&original, &mut buf).expect("serialize failed");
 
-        let result: [u8; 8] = deserialize(&mut buf[..len]).expect("deserialize failed");
+        let result: [u8; 8] = deserialize(&mut buf, len).expect("deserialize failed");
 
         assert_eq!(result, original);
     }
@@ -409,7 +390,7 @@ mod tests {
         let mut buf = [0u8; 512];
         let len = serialize(&original, &mut buf).expect("serialize failed");
 
-        let result: [u32; 16] = deserialize(&mut buf[..len]).expect("deserialize failed");
+        let result: [u32; 16] = deserialize(&mut buf, len).expect("deserialize failed");
 
         assert_eq!(result, original);
     }
@@ -429,7 +410,7 @@ mod tests {
         // The corruption will be detected when the CRC is verified
         buf[len / 2] = buf[len / 2].wrapping_add(1);
 
-        let result: Result<TestMessage, DecodeError> = deserialize(&mut buf[..len]);
+        let result: Result<TestMessage, DecodeError> = deserialize(&mut buf, len);
 
         match result {
             Err(DecodeError::CrcMismatch { expected, computed }) => {
@@ -443,9 +424,10 @@ mod tests {
     #[test]
     fn test_cobs_decode_failure() {
         // Create invalid COBS data - starts with 0x00 which is invalid for COBS
-        let invalid_cobs = [0x00, 0x01, 0x02, 0x03];
+        let mut invalid_cobs = [0x00, 0x01, 0x02, 0x03];
+        let invalid_cobs_len = invalid_cobs.len();
 
-        let result: Result<TestMessage, DecodeError> = deserialize(&mut invalid_cobs.clone());
+        let result: Result<TestMessage, DecodeError> = deserialize(&mut invalid_cobs, invalid_cobs_len);
 
         match result {
             Err(DecodeError::CobsDecodeFailed) => {
@@ -523,7 +505,7 @@ mod tests {
         let mut buf = [0u8; 512];
         let len = serialize(&original, &mut buf).expect("serialize failed");
 
-        let result: TestMessage = deserialize(&mut buf[..len]).expect("deserialize failed");
+        let result: TestMessage = deserialize(&mut buf, len).expect("deserialize failed");
 
         assert_eq!(result, original);
     }
@@ -545,12 +527,12 @@ mod tests {
 
         // Encode and decode first message
         let len1 = serialize(&msg1, &mut buf).expect("serialize failed");
-        let decoded1: TestMessage = deserialize(&mut buf[..len1]).expect("deserialize failed");
+        let decoded1: TestMessage = deserialize(&mut buf, len1).expect("deserialize failed");
         assert_eq!(decoded1, msg1);
 
         // Reuse buffer for second message
         let len2 = serialize(&msg2, &mut buf).expect("serialize failed");
-        let decoded2: TestMessage = deserialize(&mut buf[..len2]).expect("deserialize failed");
+        let decoded2: TestMessage = deserialize(&mut buf, len2).expect("deserialize failed");
         assert_eq!(decoded2, msg2);
     }
 
@@ -564,7 +546,7 @@ mod tests {
         // we'll just corrupt something and expect a CRC mismatch
         buf[1] = buf[1].wrapping_add(1);
 
-        let result: Result<u32, DecodeError> = deserialize(&mut buf[..len]);
+        let result: Result<u32, DecodeError> = deserialize(&mut buf, len);
 
         match result {
             Err(DecodeError::CrcMismatch { .. }) => {
@@ -595,7 +577,7 @@ mod tests {
         let mut buf = [0u8; 1024];
         let len = serialize(&original, &mut buf).expect("serialize failed");
 
-        let result: [u64; 32] = deserialize(&mut buf[..len]).expect("deserialize failed");
+        let result: [u64; 32] = deserialize(&mut buf, len).expect("deserialize failed");
 
         assert_eq!(result, original);
     }
@@ -615,7 +597,7 @@ mod tests {
         // Let's cut it very short to ensure something fails
         let truncated_len = len / 2;
 
-        let result: Result<u32, DecodeError> = deserialize(&mut buf[..truncated_len]);
+        let result: Result<u32, DecodeError> = deserialize(&mut buf, truncated_len);
 
         // Either COBS decode or postcard deserialize should fail
         assert!(result.is_err());
@@ -677,7 +659,7 @@ mod tests {
         for val in [0u8, 1, 128, 255] {
             let mut buf = [0u8; 64];
             let len = serialize(&val, &mut buf).expect("serialize failed");
-            let result: u8 = deserialize(&mut buf[..len]).expect("deserialize failed");
+            let result: u8 = deserialize(&mut buf, len).expect("deserialize failed");
             assert_eq!(result, val);
         }
     }
@@ -688,7 +670,7 @@ mod tests {
         let mut buf = [0u8; 128];
         let len = serialize(&original, &mut buf).expect("serialize failed");
 
-        let result: (u32, i32, bool) = deserialize(&mut buf[..len]).expect("deserialize failed");
+        let result: (u32, i32, bool) = deserialize(&mut buf, len).expect("deserialize failed");
 
         assert_eq!(result, original);
     }
@@ -699,7 +681,7 @@ mod tests {
         let mut buf = [0u8; 64];
         let len = serialize(&original, &mut buf).expect("serialize failed");
 
-        let result: () = deserialize(&mut buf[..len]).expect("deserialize failed");
+        let result: () = deserialize(&mut buf, len).expect("deserialize failed");
 
         assert_eq!(result, original);
     }
@@ -710,13 +692,13 @@ mod tests {
         let original_ok: Result<u32, u32> = Ok(42);
         let mut buf = [0u8; 64];
         let len = serialize(&original_ok, &mut buf).expect("serialize failed");
-        let result_ok: Result<u32, u32> = deserialize(&mut buf[..len]).expect("deserialize failed");
+        let result_ok: Result<u32, u32> = deserialize(&mut buf, len).expect("deserialize failed");
         assert_eq!(result_ok, original_ok);
 
         let original_err: Result<u32, u32> = Err(999);
         let len = serialize(&original_err, &mut buf).expect("serialize failed");
         let result_err: Result<u32, u32> =
-            deserialize(&mut buf[..len]).expect("deserialize failed");
+            deserialize(&mut buf, len).expect("deserialize failed");
         assert_eq!(result_err, original_err);
     }
 }

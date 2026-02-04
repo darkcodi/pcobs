@@ -15,4 +15,4 @@ readme = "README.md"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 crc = "3.4"
 postcard = { version = "1.1", default-features = false }
-corncobs = "0.1"
+cobsin = "1.0"
